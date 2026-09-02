@@ -26,7 +26,7 @@ object Content{
     val skills:List<Skill>=List(40){i->when(i%10){0->Skill("Keen Eye ${i+1}","+${2+i%5}% accuracy",accuracy=.02+(i%5)*.01);1->Skill("Predator ${i+1}","+${2+i%5}% critical chance",crit=.02+(i%5)*.01);2->Skill("Fleet Step ${i+1}","+${2+i%5}% dodge",dodge=.02+(i%5)*.01);3->Skill("Ironblood ${i+1}","+${5+(i%5)*2} max HP",hp=5+(i%5)*2);4->Skill("Savage Force ${i+1}","+${3+i%5}% damage",damage=.03+(i%5)*.01);5->Skill("Vital Flow ${i+1}","+${3+i%5}% healing",heal=.03+(i%5)*.01);else->Skill("Combat Instinct ${i+1}","+1% crit, +1% accuracy",crit=.01,accuracy=.01)}}
     fun rollRarity(seed:Int=Random.nextInt(100)):Rarity{val n=seed%100;return when{n<52->Rarity.COMMON;n<77->Rarity.UNCOMMON;n<90->Rarity.RARE;n<96->Rarity.EPIC;n<99->Rarity.LEGENDARY;else->Rarity.MYTHIC}}
     fun ability():Ability{val a=abilities.random();val r=rollRarity();return a.copy(rarity=r,power=(a.power*r.mult).roundToInt())}
-    fun gear(kill:Int):Gear{val r=rollRarity(kill+Random.nextInt(100));val n=listOf("Warden","Ruin","Hunter","Oracle","Grave","Royal","Riftborn").random();val slot=listOf("Weapon","Armor","Helm","Gloves","Boots","Relic").random();return Gear(slot,"${r.name.lowercase().replaceFirstChar{it.uppercase()}} $n $slot",r,(4+r.mult*5).roundToInt(),(2+r.mult*3).roundToInt(),(r.mult*10).roundToInt(),if(slot=="Weapon"||slot=="Relic").01*r.weight else 0.0,.01*r.weight)}
+    fun gear(kill:Int):Gear{val r=rollRarity(kill+Random.nextInt(100));val n=listOf("Warden","Ruin","Hunter","Oracle","Grave","Royal","Riftborn").random();val slot=listOf("Weapon","Armor","Helm","Gloves","Boots","Relic").random();val tier=r.mult;return Gear(slot,"${r.name.lowercase().replaceFirstChar{it.uppercase()}} $n $slot",r,(4+tier*5).roundToInt(),(2+tier*3).roundToInt(),(tier*10).roundToInt(),if(slot=="Weapon"||slot=="Relic")(.01+tier*.012).coerceAtMost(.06) else 0.0,(.005+tier*.01).coerceAtMost(.035))}
     fun enemy(kill:Int):Enemy{val boss=kill>0&&kill%10==0;val level=1+kill/3;val growth=1.0+kill*.032;val base=if(boss)130 else 48;val hp=(base*growth*(1+level*.045)).roundToInt();val names=if(boss)listOf("The Ash Tyrant","Gravebound Wyrm","Crownless Devourer","Rift Colossus","Blood Oracle")else listOf("Goblin Raider","Bone Hound","Feral Wisp","Cave Stalker","Rotfang","Ashling","Bandit Marauder");return Enemy(names.random(),level,hp,hp,(9*growth*(if(boss)1.35 else 1)).roundToInt(),(3+level*.65).roundToInt(),boss,listOf("Aggressive","Armored","Swift","Cursed","Regenerating").random())}
 }
 
@@ -35,7 +35,14 @@ object Engine{
         val count=Random.nextInt(3,7)
         var abilities=Content.abilities.shuffled().take(count).map{val r=Content.rollRarity();it.copy(rarity=r,power=(it.power*r.mult).roundToInt())}
         if(abilities.none{it.kind!=AbilityKind.PASSIVE}){val active=Content.abilities.filter{it.kind!=AbilityKind.PASSIVE}.random();abilities=abilities.dropLast(1)+active.copy(rarity=Content.rollRarity())}
-        val skills=Content.skills.shuffled().take(Random.nextInt(1,4));val gear=List(2){Content.gear(0)}.distinctBy{it.slot};val p=Player(abilities=abilities,skills=skills,gear=gear);return GameState(p,Content.enemy(0),listOf("Run #$runId begins. Your build is randomized.","$count abilities manifested.","The endless descent begins."),runId=runId)
+        val skills=Content.skills.shuffled().take(Random.nextInt(1,4))
+        val gear=buildStartingGear()
+        val p=Player(abilities=abilities,skills=skills,gear=gear)
+        return GameState(p,Content.enemy(0),listOf("Run #$runId begins. Your build is randomized.","$count abilities manifested.","The endless descent begins."),runId=runId)
+    }
+    private fun buildStartingGear():List<Gear>{
+        val slots=listOf("Weapon","Armor","Helm","Gloves","Boots","Relic").shuffled().take(2)
+        return slots.map{slot->Content.gear(0).copy(slot=slot,name="${Content.rollRarity().name.lowercase().replaceFirstChar{it.uppercase()}} Starter $slot")}
     }
     private fun derived(p:Player):Player{val g=p.gear;val s=p.skills;val damageMult=1+s.sumOf{it.damage};return p.copy(maxHp=100+g.sumOf{it.hp}+s.sumOf{it.hp},attack=((12+g.sumOf{it.attack})*damageMult).roundToInt(),defense=5+g.sumOf{it.defense},crit=(.05+g.sumOf{it.crit}).coerceAtMost(.65),accuracy=(.90+g.sumOf{it.accuracy}).coerceAtMost(.99),dodge=(.05+s.sumOf{it.dodge}).coerceAtMost(.45))}
     }
