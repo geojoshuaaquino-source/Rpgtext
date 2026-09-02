@@ -4,8 +4,12 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 enum class Rarity(val weight: Int, val mult: Double) {
-    COMMON(52, 1.0), UNCOMMON(25, 1.15), RARE(13, 1.35),
-    EPIC(6, 1.65), LEGENDARY(3, 2.05), MYTHIC(1, 2.60)
+    COMMON(52, 1.00),
+    UNCOMMON(25, 1.15),
+    RARE(13, 1.35),
+    EPIC(6, 1.65),
+    LEGENDARY(3, 2.05),
+    MYTHIC(1, 2.60)
 }
 
 enum class AbilityKind { ATTACK, DEFENSE, HEAL, CONTROL, PASSIVE }
@@ -104,16 +108,20 @@ object Content {
         "Wild", "Crystal", "Soul", "Infernal", "Tidal", "Gale", "Obsidian", "Star", "Dawn"
     )
     private val nouns = listOf("Strike", "Burst", "Spear", "Wave")
+    private val gearSlots = listOf("Weapon", "Armor", "Helm", "Gloves", "Boots", "Relic")
+    private val gearPrefixes = listOf("Warden", "Ruin", "Hunter", "Oracle", "Grave", "Royal", "Riftborn")
+    private val normalEnemies = listOf("Goblin Raider", "Bone Hound", "Feral Wisp", "Cave Stalker", "Rotfang", "Ashling", "Bandit Marauder")
+    private val bossEnemies = listOf("The Ash Tyrant", "Gravebound Wyrm", "Crownless Devourer", "Rift Colossus", "Blood Oracle")
+    private val traits = listOf("Aggressive", "Armored", "Swift", "Cursed", "Regenerating")
 
     fun rollRarity(): Rarity {
-        return when (Random.nextInt(100)) {
-            in 0..51 -> Rarity.COMMON
-            in 52..76 -> Rarity.UNCOMMON
-            in 77..89 -> Rarity.RARE
-            in 90..95 -> Rarity.EPIC
-            in 96..98 -> Rarity.LEGENDARY
-            else -> Rarity.MYTHIC
+        val roll = Random.nextInt(100)
+        var cursor = 0
+        for (rarity in Rarity.entries) {
+            cursor += rarity.weight
+            if (roll < cursor) return rarity
         }
+        return Rarity.COMMON
     }
 
     val abilities: List<Ability> = List(100) { i ->
@@ -126,7 +134,7 @@ object Content {
             AbilityKind.DEFENSE -> "Gain a $power-point barrier."
             AbilityKind.HEAL -> "Restore $power HP."
             AbilityKind.CONTROL -> "Deal ${(power * 0.65).roundToInt()} damage and weaken the enemy."
-            AbilityKind.PASSIVE -> "Regenerate 2 HP after each action."
+            AbilityKind.PASSIVE -> "Regenerate 2 HP after each completed action."
         }
         Ability(
             id = i,
@@ -164,8 +172,8 @@ object Content {
 
     fun gear(kills: Int): Gear {
         val rarity = rollRarity()
-        val slot = listOf("Weapon", "Armor", "Helm", "Gloves", "Boots", "Relic").random()
-        val prefix = listOf("Warden", "Ruin", "Hunter", "Oracle", "Grave", "Royal", "Riftborn").random()
+        val slot = gearSlots.random()
+        val prefix = gearPrefixes.random()
         val tier = rarity.mult + kills * 0.01
         return Gear(
             slot = slot,
@@ -185,25 +193,26 @@ object Content {
         val growth = 1.0 + kills * 0.032
         val baseHp = if (boss) 130 else 48
         val hp = (baseHp * growth * (1.0 + level * 0.045)).roundToInt()
-        val names = if (boss) {
-            listOf("The Ash Tyrant", "Gravebound Wyrm", "Crownless Devourer", "Rift Colossus", "Blood Oracle")
-        } else {
-            listOf("Goblin Raider", "Bone Hound", "Feral Wisp", "Cave Stalker", "Rotfang", "Ashling", "Bandit Marauder")
-        }
+        val trait = traits.random()
+        val traitHp = if (trait == "Regenerating") 1.08 else 1.0
+        val finalHp = (hp * traitHp).roundToInt()
         return Enemy(
-            name = names.random(),
+            name = (if (boss) bossEnemies else normalEnemies).random(),
             level = level,
-            hp = hp,
-            maxHp = hp,
+            hp = finalHp,
+            maxHp = finalHp,
             attack = (9 * growth * if (boss) 1.35 else 1.0).roundToInt(),
             defense = (3 + level * 0.65).roundToInt(),
             boss = boss,
-            trait = listOf("Aggressive", "Armored", "Swift", "Cursed", "Regenerating").random()
+            trait = trait
         )
     }
 }
 
 object Engine {
+    private const val MAX_ABILITIES = 6
+    private const val MAX_LOG = 14
+
     fun newRun(runId: Int = Random.nextInt(100000)): GameState {
         val abilityCount = Random.nextInt(3, 7)
         var abilities = Content.abilities.shuffled().take(abilityCount).map { base ->
@@ -216,7 +225,11 @@ object Engine {
         }
         if (abilities.none { it.kind != AbilityKind.PASSIVE }) {
             val active = Content.abilities.filter { it.kind != AbilityKind.PASSIVE }.random()
-            abilities = abilities.dropLast(1) + active.copy(id = Random.nextInt(1_000_000), rarity = Content.rollRarity())
+            abilities = abilities.dropLast(1) + active.copy(
+                id = Random.nextInt(1_000_000),
+                rarity = Content.rollRarity(),
+                power = (active.power * Content.rollRarity().mult).roundToInt()
+            )
         }
         val skills = Content.skills.shuffled().take(Random.nextInt(1, 4))
         val gear = listOf("Weapon", "Armor").map { slot -> Content.gear(0).copy(slot = slot) }
@@ -236,8 +249,10 @@ object Engine {
         val gearCrit = player.gear.sumOf { it.crit }
         val gearAccuracy = player.gear.sumOf { it.accuracy }
         val skillDamage = player.skills.sumOf { it.damage }
+        val maxHp = 100 + gearHp + player.skills.sumOf { it.hp }
         return player.copy(
-            maxHp = 100 + gearHp + player.skills.sumOf { it.hp },
+            maxHp = maxHp,
+            hp = player.hp.coerceIn(0, maxHp),
             attack = ((12 + gearAttack) * (1.0 + skillDamage)).roundToInt(),
             defense = 5 + gearDefense,
             crit = (0.05 + gearCrit + player.skills.sumOf { it.crit }).coerceAtMost(0.65),
@@ -246,9 +261,8 @@ object Engine {
         )
     }
 
-    private fun gearScore(gear: Gear): Double {
-        return gear.rarity.mult + gear.attack * 0.01 + gear.defense * 0.01 + gear.hp * 0.005 + gear.crit * 2 + gear.accuracy
-    }
+    private fun gearScore(gear: Gear): Double =
+        gear.rarity.mult + gear.attack * 0.01 + gear.defense * 0.01 + gear.hp * 0.005 + gear.crit * 2 + gear.accuracy
 
     fun claimLoot(state: GameState): GameState {
         val loot = state.pendingLoot ?: return state
@@ -260,29 +274,32 @@ object Engine {
                 val better = old == null || gearScore(item) > gearScore(old)
                 if (better) {
                     val newGear = player.gear.filterNot { it.slot == item.slot } + item
+                    val storedOld = if (old != null) player.inventoryGear + old else player.inventoryGear
                     state.copy(
-                        player = derived(player.copy(gear = newGear)),
+                        player = derived(player.copy(gear = newGear, inventoryGear = storedOld)),
                         pendingLoot = null,
-                        log = (state.log + "Equipped ${item.name}.").takeLast(14)
+                        log = addLog(state.log, if (old == null) "Equipped ${item.name}." else "Equipped ${item.name}; old ${old.name} moved to inventory.")
                     )
                 } else {
                     state.copy(
                         player = player.copy(inventoryGear = player.inventoryGear + item),
                         pendingLoot = null,
-                        log = (state.log + "Stored ${item.name} in inventory.").takeLast(14)
+                        log = addLog(state.log, "Stored ${item.name} in inventory.")
                     )
                 }
             }
             LootKind.ABILITY -> {
                 val ability = loot.ability ?: return state.copy(pendingLoot = null)
-                val equipped = if (player.abilities.size < 6) player.abilities + ability else player.abilities
+                val equip = player.abilities.size < MAX_ABILITIES
+                val updatedPlayer = if (equip) {
+                    player.copy(abilities = player.abilities + ability)
+                } else {
+                    player.copy(inventoryAbilities = player.inventoryAbilities + ability)
+                }
                 state.copy(
-                    player = player.copy(
-                        abilities = equipped,
-                        inventoryAbilities = player.inventoryAbilities + ability
-                    ),
+                    player = updatedPlayer,
                     pendingLoot = null,
-                    log = (state.log + if (player.abilities.size < 6) "${ability.name} equipped." else "${ability.name} stored.").takeLast(14)
+                    log = addLog(state.log, if (equip) "${ability.name} equipped." else "${ability.name} stored.")
                 )
             }
         }
@@ -293,16 +310,14 @@ object Engine {
         val player = derived(state.player)
         val enemy = state.enemy
         val ability = player.abilities.getOrNull(index) ?: return state
+
         if (ability.kind == AbilityKind.PASSIVE) {
-            return state.copy(log = (state.log + "${ability.name} is passive; it triggers automatically.").takeLast(14))
+            return state.copy(log = addLog(state.log, "${ability.name} is passive; it triggers automatically."))
         }
+
         val cooldown = state.cooldowns[index] ?: 0
-        if (cooldown > 0) {
-            return state.copy(log = (state.log + "${ability.name} has $cooldown turn(s) remaining.").takeLast(14))
-        }
-        if (player.energy < ability.cost) {
-            return state.copy(log = (state.log + "Not enough energy for ${ability.name}.").takeLast(14))
-        }
+        if (cooldown > 0) return state.copy(log = addLog(state.log, "${ability.name} has $cooldown turn(s) remaining."))
+        if (player.energy < ability.cost) return state.copy(log = addLog(state.log, "Not enough energy for ${ability.name}."))
 
         var damage = when (ability.kind) {
             AbilityKind.ATTACK -> (ability.power + player.attack * 0.55).roundToInt()
@@ -312,13 +327,15 @@ object Engine {
         var healed = 0
         if (ability.kind == AbilityKind.HEAL) {
             healed = (ability.power * (1.0 + player.skills.sumOf { it.heal })).roundToInt()
-            healed = healed.coerceAtMost(player.maxHp - player.hp)
+                .coerceAtMost(player.maxHp - player.hp)
         }
-        if (damage > 0 && Random.nextDouble() > player.accuracy) damage = 0
+
+        val hit = damage > 0 && Random.nextDouble() <= player.accuracy
+        if (!hit) damage = 0
         val critical = damage > 0 && Random.nextDouble() < player.crit
         if (critical) damage = (damage * 1.75).roundToInt()
-        if (enemy.trait == "Armored") damage = (damage * 0.80).roundToInt()
-        damage = if (damage > 0) (damage - enemy.defense).coerceAtLeast(1) else 0
+        if (enemy.trait == "Armored" && damage > 0) damage = (damage * 0.80).roundToInt()
+        if (damage > 0) damage = (damage - enemy.defense).coerceAtLeast(1)
 
         var nextPlayer = player.copy(
             energy = (player.energy - ability.cost + 8).coerceIn(0, player.maxEnergy),
@@ -333,8 +350,8 @@ object Engine {
         val enemyHp = (enemy.hp - damage).coerceAtLeast(0)
 
         if (ability.kind == AbilityKind.DEFENSE) {
-            val newBarrier = (ability.power * 0.75).roundToInt()
-            return finishTurn(state, nextPlayer, enemy, lines, newBarrier, weakened, nextCooldowns)
+            val addedBarrier = (ability.power * 0.75).roundToInt()
+            return finishTurn(state, nextPlayer, enemy, lines, state.barrier + addedBarrier, weakened, nextCooldowns)
         }
 
         if (enemyHp <= 0) {
@@ -346,24 +363,26 @@ object Engine {
                 currentXp -= level * 100
                 level++
             }
+            val newKills = nextPlayer.kills + 1
             nextPlayer = nextPlayer.copy(
                 level = level,
                 xp = currentXp,
-                kills = nextPlayer.kills + 1,
+                kills = newKills,
                 gold = nextPlayer.gold + gold,
                 hp = (nextPlayer.hp + 8).coerceAtMost(nextPlayer.maxHp),
                 energy = (nextPlayer.energy + 10).coerceAtMost(nextPlayer.maxEnergy)
             )
             val loot = if (Random.nextDouble() < 0.62) {
-                Loot(LootKind.GEAR, gear = Content.gear(nextPlayer.kills))
+                Loot(LootKind.GEAR, gear = Content.gear(newKills))
             } else {
                 Loot(LootKind.ABILITY, ability = Content.ability())
             }
-            val message = "${enemy.name} falls. +$xp XP • +$gold gold."
+            val levelText = if (level > player.level) " LEVEL UP!" else ""
+            val bossText = if (enemy.boss) " BOSS SLAIN. No final boss awaits." else " The next monster is stronger."
             return GameState(
                 player = derived(nextPlayer),
-                enemy = Content.enemy(nextPlayer.kills),
-                log = (state.log + lines + message + if (enemy.boss) " BOSS SLAIN. No final boss awaits." else " The next monster is stronger.").takeLast(14),
+                enemy = Content.enemy(newKills),
+                log = addLog(state.log, *lines.toTypedArray(), "${enemy.name} falls. +$xp XP • +$gold gold.$levelText$bossText"),
                 runId = state.runId,
                 floor = state.floor + 1,
                 pendingLoot = loot,
@@ -401,6 +420,7 @@ object Engine {
             finalEnemyHp += regen
             if (regen > 0) lines += "${enemy.name} regenerates $regen HP."
         }
+
         nextPlayer = nextPlayer.copy(
             hp = (nextPlayer.hp - retaliation).coerceAtLeast(0),
             damageTaken = nextPlayer.damageTaken + retaliation
@@ -433,24 +453,27 @@ object Engine {
                 lines += "Passive regeneration restores $regen HP."
             }
         }
+
         val nextCooldowns = cooldowns
             .mapValues { (_, value) -> (value - 1).coerceAtLeast(0) }
             .filterValues { it > 0 }
+
         if (nextPlayer.hp <= 0) {
             return GameState(
                 player = derived(nextPlayer),
                 enemy = enemy,
-                log = (state.log + lines + "Your run ends here.").takeLast(14),
+                log = addLog(state.log, *lines.toTypedArray(), "Your run ends here."),
                 dead = true,
                 runId = state.runId,
                 floor = state.floor,
                 cooldowns = emptyMap()
             )
         }
+
         return GameState(
             player = derived(nextPlayer),
             enemy = enemy,
-            log = (state.log + lines).takeLast(14),
+            log = addLog(state.log, *lines.toTypedArray()),
             runId = state.runId,
             floor = state.floor,
             barrier = barrier,
@@ -458,4 +481,7 @@ object Engine {
             cooldowns = nextCooldowns
         )
     }
+
+    private fun addLog(current: List<String>, vararg messages: String): List<String> =
+        (current + messages).takeLast(MAX_LOG)
 }
