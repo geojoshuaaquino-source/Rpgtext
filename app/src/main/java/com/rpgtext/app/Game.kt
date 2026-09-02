@@ -6,6 +6,7 @@ import kotlin.random.Random
 enum class Rarity(val weight:Int,val mult:Double){COMMON(52,1.0),UNCOMMON(25,1.15),RARE(13,1.35),EPIC(6,1.65),LEGENDARY(3,2.05),MYTHIC(1,2.6)}
 enum class AbilityKind{ATTACK,DEFENSE,HEAL,CONTROL,PASSIVE}
 enum class LootKind{ABILITY,GEAR}
+
 data class Ability(val id:Int,val name:String,val rarity:Rarity,val kind:AbilityKind,val power:Int,val cost:Int,val cooldown:Int,val text:String)
 data class Skill(val name:String,val text:String,val crit:Double=0.0,val accuracy:Double=0.0,val dodge:Double=0.0,val hp:Int=0,val damage:Double=0.0,val heal:Double=0.0)
 data class Gear(val slot:String,val name:String,val rarity:Rarity,val attack:Int,val defense:Int,val hp:Int,val crit:Double,val accuracy:Double)
@@ -38,12 +39,13 @@ object Engine{
         val skills=Content.skills.shuffled().take(Random.nextInt(1,4))
         val gear=buildStartingGear()
         val p=Player(abilities=abilities,skills=skills,gear=gear)
-        return GameState(p,Content.enemy(0),listOf("Run #$runId begins. Your build is randomized.","$count abilities manifested.","The endless descent begins."),runId=runId)
+        return GameState(derived(p),Content.enemy(0),listOf("Run #$runId begins. Your build is randomized.","$count abilities manifested.","The endless descent begins."),runId=runId)
     }
     private fun buildStartingGear():List<Gear>{val slots=listOf("Weapon","Armor","Helm","Gloves","Boots","Relic").shuffled().take(2);return slots.map{slot->Content.gear(0).copy(slot=slot,name="${Content.rollRarity().name.lowercase().replaceFirstChar{it.uppercase()}} Starter $slot")}}
     private fun derived(p:Player):Player{val g=p.gear;val s=p.skills;val damageMult=1+s.sumOf{it.damage};return p.copy(maxHp=100+g.sumOf{it.hp}+s.sumOf{it.hp},attack=((12+g.sumOf{it.attack})*damageMult).roundToInt(),defense=5+g.sumOf{it.defense},crit=(.05+g.sumOf{it.crit}).coerceAtMost(.65),accuracy=(.90+g.sumOf{it.accuracy}).coerceAtMost(.99),dodge=(.05+s.sumOf{it.dodge}).coerceAtMost(.45))}
     }
-    fun claimLoot(state:GameState):GameState{val loot=state.pendingLoot?:return state;val p=state.player;return when(loot.kind){LootKind.GEAR->{val item=loot.gear!!;val old=p.gear.find{it.slot==item.slot};val better=old==null||item.rarity.mult+item.attack*.01+item.defense*.01+item.hp*.005>old.rarity.mult+old.attack*.01+old.defense*.01+old.hp*.005;if(better)state.copy(player=derived(p.copy(gear=(p.gear.filterNot{it.slot==item.slot}+item))),pendingLoot=null,log=(state.log+"Equipped ${item.name}.").takeLast(14))else state.copy(player=p.copy(inventoryGear=p.inventoryGear+item),pendingLoot=null,log=(state.log+"Stored ${item.name} in inventory.").takeLast(14))};LootKind.ABILITY->{val a=loot.ability!!;val replace=p.abilities.minByOrNull{it.rarity.mult};val updated=if(p.abilities.size<6)p.abilities+a else p.abilities.filterNot{it.id==replace?.id}+a;state.copy(player=p.copy(abilities=updated.take(6),inventoryAbilities=p.inventoryAbilities+a.let{listOf(it)}),pendingLoot=null,log=(state.log+"${a.name} joined your ability pool.").takeLast(14))}}
+    private fun gearScore(x:Gear)=x.rarity.mult+x.attack*.01+x.defense*.01+x.hp*.005+x.crit*2+x.accuracy
+    fun claimLoot(state:GameState):GameState{val loot=state.pendingLoot?:return state;val p=state.player;return when(loot.kind){LootKind.GEAR->{val item=loot.gear!!;val old=p.gear.find{it.slot==item.slot};val better=old==null||gearScore(item)>gearScore(old);if(better)state.copy(player=derived(p.copy(gear=p.gear.filterNot{it.slot==item.slot}+item)),pendingLoot=null,log=(state.log+"Equipped ${item.name}.").takeLast(14))else state.copy(player=p.copy(inventoryGear=p.inventoryGear+item),pendingLoot=null,log=(state.log+"Stored ${item.name} in inventory.").takeLast(14))};LootKind.ABILITY->{val a=loot.ability!!;val updated=if(p.abilities.size<6)p.abilities+a else p.abilities;state.copy(player=p.copy(abilities=updated.take(6),inventoryAbilities=p.inventoryAbilities+a.let{listOf(it)}),pendingLoot=null,log=(state.log+"${a.name} joined your ability pool.").takeLast(14))}}
     }
     fun act(state:GameState,index:Int):GameState{
         if(state.dead||state.enemy==null||state.pendingLoot!=null)return state
@@ -52,24 +54,29 @@ object Engine{
         if(a.kind==AbilityKind.PASSIVE)return state.copy(log=(state.log+"${a.name} is passive; its effect triggers automatically.").takeLast(14))
         if(remaining>0)return state.copy(log=(state.log+"${a.name} is on cooldown for $remaining more turn${if(remaining==1)""else"s"}.").takeLast(14))
         if(p.energy<a.cost)return state.copy(log=(state.log+"Not enough energy for ${a.name}.").takeLast(14))
-        var dmg=0;var heal=0;when(a.kind){AbilityKind.ATTACK->dmg=(a.power+p.attack*.55).roundToInt();AbilityKind.DEFENSE->{heal=(a.power*.20).roundToInt()};AbilityKind.HEAL->heal=a.power;AbilityKind.CONTROL->dmg=(a.power*.65+p.attack*.35).roundToInt();AbilityKind.PASSIVE->{}}
+        var dmg=0;var heal=0;when(a.kind){AbilityKind.ATTACK->dmg=(a.power+p.attack*.55).roundToInt();AbilityKind.DEFENSE->{};AbilityKind.HEAL->heal=a.power;AbilityKind.CONTROL->dmg=(a.power*.65+p.attack*.35).roundToInt();AbilityKind.PASSIVE->{}}
         if((a.kind==AbilityKind.ATTACK||a.kind==AbilityKind.CONTROL)&&Random.nextDouble()>p.accuracy)dmg=0
         val crit=dmg>0&&Random.nextDouble()<p.crit;if(crit)dmg=(dmg*1.75).roundToInt();dmg=(dmg-e.defense).coerceAtLeast(if(dmg>0)1 else 0)
         val enemyHp=(e.hp-dmg).coerceAtLeast(0);val healMult=1+p.skills.sumOf{it.heal};val healed=(heal*healMult).roundToInt().coerceAtMost(p.maxHp-p.hp)
         var np=p.copy(energy=(p.energy-a.cost+8).coerceIn(0,p.maxEnergy),hp=p.hp+healed)
         val lines=mutableListOf("You use ${a.name}. ${if(dmg>0)"-$dmg HP"else"No damage"}${if(crit)" CRITICAL!"else""}${if(healed>0)" • +$healed HP"else""}.")
         var weakened=state.weakenedTurns
-        val newCooldowns=state.cooldowns.toMutableMap().apply{remove(index)}
-        if(a.cooldown>0)newCooldowns[index]=a.cooldown
+        val newCooldowns=state.cooldowns.toMutableMap()
+        if(a.cooldown>0)newCooldowns[index]=a.cooldown+1
         if(a.kind==AbilityKind.DEFENSE){val barrier=(a.power*.75).roundToInt();return finishTurn(state,np,e,lines,barrier,weakened,newCooldowns)}
         if(a.kind==AbilityKind.CONTROL)weakened=2
-        if(enemyHp<=0){val gold=8+e.level*3+if(e.boss)35 else 0;val xp=12+e.level*4;var level=np.level;var curXp=np.xp+xp;while(curXp>=level*100){curXp-=level*100;level++};np=np.copy(level=level,xp=curXp,kills=np.kills+1,gold=np.gold+gold,hp=minOf(np.maxHp,np.hp+8),energy=minOf(np.maxEnergy,np.energy+10));val loot=if(Random.nextDouble()<.62)Loot(LootKind.GEAR,gear=Content.gear(state.player.kills))else Loot(LootKind.ABILITY,ability=Content.ability());return GameState(derived(np),Content.enemy(np.kills),(state.log+lines+"${e.name} falls. +$xp XP • +$gold gold."+(if(e.boss)" BOSS SLAIN. The endless climb continues." else " The next monster has grown stronger.")).takeLast(14),runId=state.runId,floor=state.floor+1,pendingLoot=loot,barrier=0,weakenedTurns=0,cooldowns=emptyMap())}
-        var retaliation=(e.attack-p.defense).coerceAtLeast(1);if(weakened>0)retaliation=(retaliation*.65).roundToInt().coerceAtLeast(1);if(Random.nextDouble()<p.dodge)retaliation=0
+        if(enemyHp<=0){val gold=8+e.level*3+if(e.boss)35 else 0;val xp=12+e.level*4;var level=np.level;var curXp=np.xp+xp;while(curXp>=level*100){curXp-=level*100;level++};np=np.copy(level=level,xp=curXp,kills=np.kills+1,gold=np.gold+gold,hp=minOf(np.maxHp,np.hp+8),energy=minOf(np.maxEnergy,np.energy+10));val loot=if(Random.nextDouble()<.62)Loot(LootKind.GEAR,gear=Content.gear(state.player.kills))else Loot(LootKind.ABILITY,ability=Content.ability());return GameState(derived(np),Content.enemy(np.kills),(state.log+lines+"${e.name} falls. +$xp XP • +$gold gold."+(if(e.boss)" BOSS SLAIN. The endless descent continues." else " The next monster has grown stronger.")).takeLast(14),runId=state.runId,floor=state.floor+1,pendingLoot=loot,barrier=0,weakenedTurns=0,cooldowns=emptyMap())}
+        var retaliation=(e.attack-p.defense).coerceAtLeast(1)
+        when(e.trait){"Aggressive"->retaliation=(retaliation*1.15).roundToInt().coerceAtLeast(1);"Armored"->{};"Swift"->{if(Random.nextDouble()<.15)retaliation+=(retaliation*.35).roundToInt()};"Cursed"->if(Random.nextDouble()<.20){np=np.copy(energy=(np.energy-3).coerceAtLeast(0));lines+="The curse drains 3 energy."};"Regenerating"->{} }
+        if(weakened>0)retaliation=(retaliation*.65).roundToInt().coerceAtLeast(1)
+        if(Random.nextDouble()<p.dodge)retaliation=0
         var remainingBarrier=state.barrier
         if(remainingBarrier>0&&retaliation>0){val blocked=minOf(remainingBarrier,retaliation);retaliation-=blocked;remainingBarrier-=blocked;lines+="Barrier blocks $blocked damage."}
         if(retaliation==0)lines+="You evade the ${e.name}'s attack."else lines+="${e.name} hits you for $retaliation."
+        if(e.trait=="Regenerating"&&enemyHp>0){val regen=minOf(3+e.level/4,e.maxHp-enemyHp);if(regen>0)lines+="${e.name} regenerates $regen HP."}
+        val finalEnemyHp=if(e.trait=="Regenerating")minOf(e.maxHp,enemyHp+3+e.level/4)else enemyHp
         np=np.copy(hp=(np.hp-retaliation).coerceAtLeast(0),damageTaken=np.damageTaken+retaliation)
-        return finishTurn(state,np,e,lines,remainingBarrier,weakened,newCooldowns)
+        return finishTurn(state,np,e.copy(hp=finalEnemyHp),lines,remainingBarrier,weakened,newCooldowns)
     }
     private fun finishTurn(state:GameState,np:Player,e:Enemy,lines:MutableList<String>,barrier:Int,weakened:Int,cooldowns:Map<Int,Int>):GameState{
         var p=np
