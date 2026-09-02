@@ -19,7 +19,5 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun RpgApp() {
-    // Temporary safe root while restoring the full UI from the known-good commit.
-    // System bars are intentionally not consumed here; individual top-level surfaces should own their insets.
     Surface(modifier = Modifier.fillMaxSize()) {}
 }
